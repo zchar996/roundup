@@ -1,0 +1,5 @@
+# Copy this file to .env (or .env.local) and fill in your own Supabase project values.
+# Find these in your Supabase project: Settings → API
+
+VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+VITE_SUPABASE_ANON_KEY=YOUR_ANON_PUBLIC_KEY

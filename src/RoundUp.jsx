@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase, supabaseConfigured, fetchGroup, createGroupRow, updateGroupRow, subscribeToGroup } from "./supabaseClient.js";
 
 // ---------- helpers ----------
@@ -67,6 +67,9 @@ export default function RoundUp() {
   const [toast, setToast] = useState(null);
   const [errorMsg, setErrorMsg] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [longPressDate, setLongPressDate] = useState(null); // dateKey of open names modal (mobile)
+  const longPressTimer = useRef(null);
+  const longPressFired = useRef(false);
 
   const today = useMemo(() => new Date(), []);
 
@@ -238,6 +241,30 @@ export default function RoundUp() {
     const updated = { ...groupData, availability: updatedAvailability };
     setGroupData(updated);
     await persistGroup(groupCode, updated);
+  }
+
+  // Long-press (mobile) opens the full names modal for a date.
+  function startLongPress(key, hasNames) {
+    if (!hasNames) return;
+    longPressFired.current = false;
+    longPressTimer.current = setTimeout(() => {
+      longPressFired.current = true;
+      setLongPressDate(key);
+    }, 450);
+  }
+  function cancelLongPress() {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  }
+  // Wraps the date tap so a long-press release doesn't also toggle availability.
+  function handleCellTap(key) {
+    if (longPressFired.current) {
+      longPressFired.current = false;
+      return;
+    }
+    toggleDate(key);
   }
 
   function leaveGroup() {
@@ -487,19 +514,52 @@ export default function RoundUp() {
                 if (isMine) cellStyle = { ...cellStyle, ...styles.dayMine };
                 if (isBest) cellStyle = { ...cellStyle, ...styles.dayBest };
 
+                // Mobile caps avatars at 3 (date + 3 quadrants); 4+ shows 2 faces + "+N".
+                const mobileAvatars = namesHere.length <= 3 ? namesHere : namesHere.slice(0, 2);
+                const overflowCount = namesHere.length > 3 ? namesHere.length - 2 : 0;
+
                 return (
-                  <div key={idx} style={cellStyle} onClick={() => toggleDate(key)}>
+                  <div
+                    key={idx}
+                    style={cellStyle}
+                    onClick={() => handleCellTap(key)}
+                    onTouchStart={isMobile ? () => startLongPress(key, namesHere.length > 0) : undefined}
+                    onTouchEnd={isMobile ? cancelLongPress : undefined}
+                    onTouchMove={isMobile ? cancelLongPress : undefined}
+                    onTouchCancel={isMobile ? cancelLongPress : undefined}
+                    onContextMenu={isMobile ? (e) => e.preventDefault() : undefined}
+                  >
                     {isBest && <div style={styles.bestBadge}>★</div>}
-                    <div style={{ ...styles.dayNum, ...(isBest ? { color: "#E8743B" } : {}) }}>{cell.day}</div>
-                    <div style={styles.dotsRow}>
-                      {namesHere.map((n) => (
-                        <div
-                          key={n}
-                          style={{ ...styles.avDot, ...(isMobile ? styles.avDotMobile : {}), background: colorForName(n, groupData.friends) }}
-                          title={n}
-                        >{initials(n)}</div>
-                      ))}
-                    </div>
+                    {isMobile ? (
+                      <div style={styles.mobileCellGrid}>
+                        <div style={{ ...styles.dayNum, ...styles.mobileDayNum, ...(isBest ? { color: "#E8743B" } : {}) }}>{cell.day}</div>
+                        {mobileAvatars.map((n) => (
+                          <div
+                            key={n}
+                            style={{ ...styles.avDot, ...styles.avDotMobile, background: colorForName(n, groupData.friends) }}
+                          >{initials(n)}</div>
+                        ))}
+                        {overflowCount > 0 && (
+                          <div
+                            style={styles.overflowPill}
+                            onClick={(e) => { e.stopPropagation(); setLongPressDate(key); }}
+                          >+{overflowCount}</div>
+                        )}
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{ ...styles.dayNum, ...(isBest ? { color: "#E8743B" } : {}) }}>{cell.day}</div>
+                        <div style={styles.dotsRow}>
+                          {namesHere.map((n) => (
+                            <div
+                              key={n}
+                              style={{ ...styles.avDot, background: colorForName(n, groupData.friends) }}
+                              title={n}
+                            >{initials(n)}</div>
+                          ))}
+                        </div>
+                      </>
+                    )}
                   </div>
                 );
               })}
@@ -519,6 +579,33 @@ export default function RoundUp() {
           )}
         </div>
       </div>
+
+      {longPressDate && (() => {
+        const names = groupData.availability[longPressDate] || [];
+        const [, m, d] = longPressDate.split("-").map(Number);
+        const ordered = groupData.friends.filter(f => names.includes(f));
+        return (
+          <div style={styles.modalBackdrop} onClick={() => setLongPressDate(null)}>
+            <div style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
+              <div style={styles.modalHeader}>
+                <div style={styles.modalTitle}>
+                  Free on {MONTH_NAMES[m - 1].slice(0, 3)} {d}
+                  <span style={styles.modalCount}>{ordered.length} {ordered.length === 1 ? "person" : "people"}</span>
+                </div>
+                <button style={styles.modalCloseBtn} onClick={() => setLongPressDate(null)} title="Close">×</button>
+              </div>
+              <div style={styles.modalList}>
+                {ordered.map((n) => (
+                  <div key={n} style={styles.modalNameRow}>
+                    <div style={{ ...styles.avatar, background: colorForName(n, groupData.friends) }}>{initials(n)}</div>
+                    <span>{n}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {toast && <div style={styles.toast}>{toast}</div>}
       {saving && <div style={styles.savingIndicator}>Saving…</div>}
@@ -980,6 +1067,34 @@ const styles = {
     fontSize: 6,
     border: "1px solid white",
   },
+  mobileCellGrid: {
+    flex: 1,
+    width: "100%",
+    height: "100%",
+    display: "grid",
+    gridTemplateColumns: "repeat(2, 1fr)",
+    gridTemplateRows: "repeat(2, 1fr)",
+    placeItems: "center",
+    gap: 1,
+  },
+  mobileDayNum: {
+    alignSelf: "start",
+    justifySelf: "start",
+  },
+  overflowPill: {
+    minWidth: 16,
+    height: 13,
+    padding: "0 3px",
+    borderRadius: 7,
+    background: "#1F4B4A",
+    color: "white",
+    fontSize: 7.5,
+    fontWeight: 700,
+    fontFamily: "Fredoka, sans-serif",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   legend: {
     display: "flex",
     gap: 18,
@@ -1023,5 +1138,70 @@ const styles = {
     borderRadius: 8,
     fontSize: 11,
     zIndex: 50,
+  },
+  modalBackdrop: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(31,40,35,0.45)",
+    display: "flex",
+    alignItems: "flex-end",
+    justifyContent: "center",
+    zIndex: 60,
+    padding: 16,
+  },
+  modalCard: {
+    background: "white",
+    borderRadius: 18,
+    padding: "18px 18px 20px",
+    width: "100%",
+    maxWidth: 360,
+    maxHeight: "70vh",
+    overflowY: "auto",
+    boxShadow: "0 -6px 30px rgba(0,0,0,0.2)",
+  },
+  modalHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    marginBottom: 14,
+  },
+  modalTitle: {
+    fontFamily: "Fredoka, sans-serif",
+    fontSize: 17,
+    fontWeight: 600,
+    color: "#1F4B4A",
+    display: "flex",
+    flexDirection: "column",
+    gap: 2,
+  },
+  modalCount: {
+    fontFamily: "Inter, sans-serif",
+    fontSize: 12,
+    fontWeight: 500,
+    color: "#8B8378",
+  },
+  modalCloseBtn: {
+    background: "#F1ECE2",
+    border: "none",
+    color: "#5C5547",
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    fontSize: 18,
+    lineHeight: 1,
+    flexShrink: 0,
+  },
+  modalList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+  },
+  modalNameRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    fontSize: 14,
+    fontWeight: 500,
+    color: "#2B2823",
   },
 };
